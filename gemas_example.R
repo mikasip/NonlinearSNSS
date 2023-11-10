@@ -8,7 +8,6 @@ library("sf")
 library("tidyr")
 library("xtable")
 library("ggplot2")
-library("NonlinearBSS")
 library("kernelshap")
 devtools::install_github("mikasip/NonlinearBSS")
 library("NonlinearBSS")
@@ -154,11 +153,11 @@ grid_coords$lon <- grid_coords_ll[, 1]
 grid_coords$lat <- grid_coords_ll[, 2]
 
 # register_stadiamaps("YOUR_API_KEY", write = TRUE)
-kola_map <- get_stadiamap(c(left = min(coords_ll[, 1]) - 0.5, bottom = min(coords_ll[, 2]) - 0.5, right = max(coords_ll[, 1]) + 0.5, top = max(coords_ll[, 2]) + 0.5),
+europe_map <- get_stadiamap(c(left = min(coords_ll[, 1]) - 0.5, bottom = min(coords_ll[, 2]) - 0.5, right = max(coords_ll[, 1]) + 0.5, top = max(coords_ll[, 2]) + 0.5),
     maptype = "stamen_terrain_background", zoom = 4
 )
 
-g <- ggmap(kola_map,
+g <- ggmap(europe_map,
     base_layer = ggplot(
         data = data.frame(coords_ll),
         aes(y = Y, x = X)
@@ -185,7 +184,7 @@ seed <- 11092023
 resiVAE <- iVAE_spatial(data_ilr, coords, c(100000, 100000), c(1, 1), p, epochs = 1000, seed = seed, batch_size = 64)
 
 ic_idx <- 15
-g <- plot_map(coords_ll, clr_dat[, 2], map = kola_map, quant = FALSE)
+g <- plot_map(coords_ll, resiVAE$IC[, ic_idx], map = europe_map, quant = FALSE)
 ggsave(plot = g, paste0("ic_", ic_idx, ".pdf"), height = 6, width = 4.9)
 
 select_points_sparsely <- function(coords, n) {
@@ -206,7 +205,7 @@ X <- cbind(clr_dat, resiVAE$aux_data)
 X <- as.data.frame(X)
 bg_points <- select_points_sparsely(coords, 200)
 
-g_bg <- ggmap(kola_map,
+g_bg <- ggmap(europe_map,
     base_layer = ggplot(
         data = data.frame(coords_ll[bg_points$inds, ]),
         aes(y = Y, x = X)
