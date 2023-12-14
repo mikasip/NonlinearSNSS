@@ -5,6 +5,8 @@ library("SpatialBSS")
 library("StatDA")
 library("ggmap")
 library("sf")
+library("sp")
+library("gstat")
 library("tidyr")
 library("xtable")
 library("ggplot2")
@@ -182,10 +184,8 @@ data_ilr <- log(gemas_dat) %*% c_mat
 p <- 17
 seed <- 11092023
 resiVAE <- iVAE_spatial(data_ilr, coords, c(100000, 100000), c(1, 1), p, epochs = 1000, seed = seed, batch_size = 64)
-
-ic_idx <- 15
-g <- plot_map(coords_ll, resiVAE$IC[, ic_idx], map = europe_map, quant = FALSE)
-ggsave(plot = g, paste0("ic_", ic_idx, ".pdf"), height = 6, width = 4.9)
+resSBSS <- sbss(as.matrix(data_ilr), as.matrix(coords), "ring", c(0, 167000))
+resSNSS <- snss_sjd(as.matrix(data_ilr), as.matrix(coords), n_block = 2, "ring", c(0, 167000))
 
 select_points_sparsely <- function(coords, n) {
     distance_matrix <- as.matrix(dist(coords))
@@ -233,11 +233,10 @@ for (l in explainer$S) {
 }
 mashap_scaled <- sweep(mashap, 2, colSums(mashap), "/")
 
-X <- as.data.frame(resiVAE$IC_unscaled)
-X <- X
+X <- as.data.frame(resiVAE$IC)
 bg_X <- X[bg_points$inds, ]
 explainer2 <- kernelshap(resiVAE, X, bg_X = bg_X, pred_fun = function(object, X) {
-    pred <- predict.iVAE(object, newdata = as.matrix(X), IC_to_data = TRUE)
+    pred <- predict(object, newdata = as.matrix(X), IC_to_data = TRUE)
     return(as.matrix(pred) %*% t(c_mat))
 })
 
@@ -253,11 +252,290 @@ for (l in explainer2$S) {
 mashap_scaled2 <- sweep(mashap2, 1, rowSums(mashap2), "/")
 mashap_scaled2
 importance_vals <- colMeans(mashap_scaled2)
+threshold <- -sort(-importance_vals)[13]
+important_inds <- which(importance_vals >= threshold)
 xtable(mashap_scaled2, digits = 3)
 xtable(data.frame(t(colMeans(mashap_scaled2))), digits = 3)
-sorted_mashap_scaled2 <- mashap_scaled2[, order(importance_vals, decreasing = TRUE)]
+importance_order <- order(importance_vals, decreasing = TRUE)
+sorted_mashap_scaled2 <- mashap_scaled2[, importance_order]
 xtable(sorted_mashap_scaled2, digits = 3)
 xtable(data.frame(t(colMeans(sorted_mashap_scaled2))), digits = 3)
 
-sorted_mashap_scaled <- mashap_scaled[, order(importance_vals, decreasing = TRUE)]
+sorted_mashap_scaled <- mashap_scaled[, importance_order]
 xtable(sorted_mashap_scaled, digits = 3)
+
+g1 <- plot_map(coords_ll, resiVAE$IC[, importance_order[1]], map = europe_map, quant = FALSE)
+g2 <- plot_map(coords_ll, resiVAE$IC[, importance_order[2]], map = europe_map, quant = FALSE)
+
+X <- as.data.frame(resSBSS$s)
+X <- X
+bg_X <- X[bg_points$inds, ]
+explainer2_sbss <- kernelshap(resSBSS, X, bg_X = bg_X, pred_fun = function(object, X) {
+    sweep(tcrossprod(as.matrix(X), object$w_inv), 2, object$x_mu, "+") %*% t(c_mat)
+})
+
+explainer2_sbss$baseline
+mashap2_sbss <- data.frame(matrix(NA, ncol = 17, nrow = 18))
+rownames(mashap2_sbss) <- sapply(colnames(gemas_dat), function(name) paste0("clr(", name, ")"))
+colnames(mashap2_sbss) <- sapply(1:17, function(i) paste0("IC", i))
+i <- 1
+for (l in explainer2_sbss$S) {
+    mashap2_sbss[i, ] <- apply(abs(l), 2, mean)
+    i <- i + 1
+}
+mashap_scaled2_sbss <- sweep(mashap2_sbss, 1, rowSums(mashap2_sbss), "/")
+mashap_scaled2_sbss
+importance_vals_sbss <- colMeans(mashap_scaled2_sbss)
+xtable(mashap_scaled2_sbss, digits = 3)
+xtable(data.frame(t(colMeans(mashap_scaled2_sbss))), digits = 3)
+importance_order_sbss <- order(importance_vals_sbss, decreasing = TRUE)
+sorted_mashap_scaled2_sbss <- mashap_scaled2_sbss[, importance_order_sbss]
+xtable(sorted_mashap_scaled2_sbss, digits = 3)
+xtable(data.frame(t(colMeans(sorted_mashap_scaled2_sbss))), digits = 3)
+
+g1_sbss <- plot_map(coords_ll, resSBSS$s[, importance_order_sbss[1]], map = europe_map, quant = FALSE)
+g2_sbss <- plot_map(coords_ll, resSBSS$s[, importance_order_sbss[2]], map = europe_map, quant = FALSE)
+
+snss_ics <- tcrossprod(data_ilr, resSNSS$w)
+X <- as.data.frame(snss_ics)
+X <- X
+bg_X <- X[bg_points$inds, ]
+explainer2_snss <- kernelshap(resSNSS, X, bg_X = bg_X, pred_fun = function(object, X) {
+    tcrossprod(as.matrix(X), solve(resSNSS$w)) %*% t(c_mat)
+})
+
+explainer2_snss$baseline
+mashap2_snss <- data.frame(matrix(NA, ncol = 17, nrow = 18))
+rownames(mashap2_snss) <- sapply(colnames(gemas_dat), function(name) paste0("clr(", name, ")"))
+colnames(mashap2_snss) <- sapply(1:17, function(i) paste0("IC", i))
+i <- 1
+for (l in explainer2_snss$S) {
+    mashap2_snss[i, ] <- apply(abs(l), 2, mean)
+    i <- i + 1
+}
+mashap_scaled2_snss <- sweep(mashap2_snss, 1, rowSums(mashap2_snss), "/")
+mashap_scaled2_snss
+importance_vals_snss <- colMeans(mashap_scaled2_snss)
+xtable(mashap_scaled2_snss, digits = 3)
+xtable(data.frame(t(colMeans(mashap_scaled2_snss))), digits = 3)
+importance_order_snss <- order(importance_vals_snss, decreasing = TRUE)
+sorted_mashap_scaled2_snss <- mashap_scaled2_snss[, importance_order_snss]
+xtable(sorted_mashap_scaled2_snss, digits = 3)
+xtable(data.frame(t(colMeans(sorted_mashap_scaled2_snss))), digits = 3)
+
+g1_snss <- plot_map(coords_ll, snss_ics[, importance_order_snss[1]], map = europe_map, quant = FALSE)
+g2_snss <- plot_map(coords_ll, snss_ics[, importance_order_snss[2]], map = europe_map, quant = FALSE)
+
+
+# Prediction part
+
+# Method to predict using ordinary kriging
+kriging_predict <- function(train_data, train_coords, test_coords, universal = FALSE) {
+    vg_df <- data.frame(cbind(train_coords, train_data))
+    vg_df_test <- data.frame(cbind(test_coords))
+    names(vg_df) <- c("x", "y", "var")
+    names(vg_df_test) <- c("x", "y")
+    coordinates(vg_df) <- ~ x + y
+    coordinates(vg_df_test) <- ~ x + y
+    vg_var <- variogram(var ~ 1, data = vg_df)
+    vg_s <- fit.variogram(object = vg_var, model = vgm(0.1, c("Sph", "Mat", "Exp")), fit.kappa = seq(0.1, 2, by = 0.1), fit.method = 6)
+    pred1 <- NULL
+    if (universal) {
+        pred1 <- krige(var ~ x + y,
+            vg_df, vg_df_test,
+            model = vg_s,
+            nmax = 50,
+        )
+    } else {
+        pred1 <- krige(var ~ 1,
+            vg_df, vg_df_test,
+            model = vg_s,
+            nmax = 50,
+        )
+    }
+    return(pred1$var1.pred)
+}
+
+# Method to predict using cokriging
+cokriging_predict <- function(train_data, train_coords, test_coords) {
+    vg_df <- data.frame(cbind(train_coords, train_data))
+    vg_df_test <- data.frame(cbind(test_coords))
+    var_names <- sapply(1:ncol(train_data), FUN = function(i) paste0("var", i))
+    names(vg_df) <- c("x", "y", var_names)
+    names(vg_df_test) <- c("x", "y")
+    coordinates(vg_df) <- ~ x + y
+    coordinates(vg_df_test) <- ~ x + y
+    g <- gstat(NULL, id = "var1", form = var1 ~ 1, data = vg_df, nmax = 50)
+    g <- gstat(g, id = "var2", form = var2 ~ 1, data = vg_df, nmax = 50)
+    g <- gstat(g, id = "var3", form = var3 ~ 1, data = vg_df, nmax = 50)
+    g <- gstat(g, id = "var4", form = var4 ~ 1, data = vg_df, nmax = 50)
+    g <- gstat(g, id = "var5", form = var5 ~ 1, data = vg_df, nmax = 50)
+    g <- gstat(g, id = "var6", form = var6 ~ 1, data = vg_df, nmax = 50)
+    g <- gstat(g, id = "var7", form = var7 ~ 1, data = vg_df, nmax = 50)
+    g <- gstat(g, id = "var8", form = var8 ~ 1, data = vg_df, nmax = 50)
+    g <- gstat(g, id = "var9", form = var9 ~ 1, data = vg_df, nmax = 50)
+    g <- gstat(g, id = "var10", form = var10 ~ 1, data = vg_df, nmax = 50)
+    g <- gstat(g, id = "var11", form = var11 ~ 1, data = vg_df, nmax = 50)
+    g <- gstat(g, id = "var12", form = var12 ~ 1, data = vg_df, nmax = 50)
+    g <- gstat(g, id = "var13", form = var13 ~ 1, data = vg_df, nmax = 50)
+    g <- gstat(g, id = "var14", form = var14 ~ 1, data = vg_df, nmax = 50)
+    g <- gstat(g, id = "var15", form = var15 ~ 1, data = vg_df, nmax = 50)
+    g <- gstat(g, id = "var16", form = var16 ~ 1, data = vg_df, nmax = 50)
+    g <- gstat(g, id = "var17", form = var17 ~ 1, data = vg_df, nmax = 50)
+    vg1 <- fit.variogram(object = variogram(var1 ~ 1, data = vg_df), model = vgm(0.1, c("Mat")), fit.method = 6)
+    vg2 <- fit.variogram(object = variogram(var2 ~ 1, data = vg_df), model = vgm(0.1, c("Mat")), fit.method = 6)
+    vg3 <- fit.variogram(object = variogram(var3 ~ 1, data = vg_df), model = vgm(0.1, c("Mat")), fit.method = 6)
+    vg4 <- fit.variogram(object = variogram(var4 ~ 1, data = vg_df), model = vgm(0.1, c("Mat")), fit.method = 6)
+    vg5 <- fit.variogram(object = variogram(var5 ~ 1, data = vg_df), model = vgm(0.1, c("Mat")), fit.method = 6)
+    vg6 <- fit.variogram(object = variogram(var6 ~ 1, data = vg_df), model = vgm(0.1, c("Mat")), fit.method = 6)
+    vg7 <- fit.variogram(object = variogram(var7 ~ 1, data = vg_df), model = vgm(0.1, c("Mat")), fit.method = 6)
+    vg8 <- fit.variogram(object = variogram(var8 ~ 1, data = vg_df), model = vgm(0.1, c("Mat")), fit.method = 6)
+    vg9 <- fit.variogram(object = variogram(var9 ~ 1, data = vg_df), model = vgm(0.1, c("Mat")), fit.method = 6)
+    vg10 <- fit.variogram(object = variogram(var10 ~ 1, data = vg_df), model = vgm(0.1, c("Mat")), fit.method = 6)
+    vg11 <- fit.variogram(object = variogram(var11 ~ 1, data = vg_df), model = vgm(0.1, c("Mat")), fit.method = 6)
+    vg12 <- fit.variogram(object = variogram(var12 ~ 1, data = vg_df), model = vgm(0.1, c("Mat")), fit.method = 6)
+    vg13 <- fit.variogram(object = variogram(var13 ~ 1, data = vg_df), model = vgm(0.1, c("Mat")), fit.method = 6)
+    vg14 <- fit.variogram(object = variogram(var14 ~ 1, data = vg_df), model = vgm(0.1, c("Mat")), fit.method = 6)
+    vg15 <- fit.variogram(object = variogram(var15 ~ 1, data = vg_df), model = vgm(0.1, c("Mat")), fit.method = 6)
+    vg16 <- fit.variogram(object = variogram(var16 ~ 1, data = vg_df), model = vgm(0.1, c("Mat")), fit.method = 6)
+    vg17 <- fit.variogram(object = variogram(var17 ~ 1, data = vg_df), model = vgm(0.1, c("Mat")), fit.method = 6)
+    models <- list(vg1, vg2, vg3, vg4, vg5, vg6, vg7, vg8, vg9, vg10, vg11, vg12, vg13, vg14, vg15, vg16, vg17)
+    ranges <- numeric(17)
+    for (i in 1:17) {
+        ranges[i] <- models[[i]]$range[1]
+    }
+    common_range <- mean(ranges)
+    g <- gstat(g, id = "var1", model = vgm(vg1$psill[1], "Mat", common_range, nugget = 0), fill.all = T)
+    v.cross <- variogram(g)
+    g <- fit.lmc(v.cross, g, fit.method = 6, correct.diagonal = 1.01)
+    pred_all <- predict(g, vg_df_test)
+    pred_var_names <- sapply(1:17, FUN = function(i) paste0("var", i, ".pred"))
+    return(as.matrix(as.data.frame(pred_all[, pred_var_names])[, 1:17]))
+}
+
+######################
+## CROSSVALIDATION ###
+######################
+
+set.seed(01122023)
+K <- 10
+p <- ncol(data_ilr)
+n <- nrow(clr_dat)
+suffle_ind <- sample(1:n)
+epochs <- 1000
+test_data_inds <- split(suffle_ind, cut(seq_along(suffle_ind), K, labels = FALSE))
+preds <- list()
+res_error <- data.frame(matrix(ncol = 4, nrow = 7 * K))
+names(res_error) <- c("Method", "Mean squared error", "Mean absolute error", "Fold")
+ind <- 1
+for (fold in 1:K) {
+    print(paste0("Fold ", fold))
+    test_indices <- test_data_inds[[fold]]
+    n_test <- length(test_indices)
+    clr_train_dat <- clr_dat[-test_indices, ]
+    clr_test_dat <- clr_dat[test_indices, ]
+    coords_test <- coords[test_indices, ]
+    coords_train <- coords[-test_indices, ]
+    data_ilr_test <- data_ilr[test_indices, ]
+    data_ilr_train <- data_ilr[-test_indices, ]
+    seed <- 01122023 + fold * 10
+    set.seed(seed)
+    co_kriging_pred <- cokriging_predict(data_ilr_train, coords_train, coords_test)
+    co_kriging_pred <- as.matrix(co_kriging_pred) %*% t(c_mat)
+    preds <- append(preds, list(list(method = "Cokriging", pred = co_kriging_pred, fold = fold)))
+    mse_cokrig_obs <- mean(as.matrix(co_kriging_pred - clr_test_dat)^2)
+    mae_cokrig_obs <- mean(as.matrix(abs(co_kriging_pred - clr_test_dat)))
+
+    resiVAE_train <- iVAE_spatial(data_ilr_train, coords_train, c(100000, 100000), c(1, 1), p, epochs = epochs, seed = seed, error_dist_sigma = 0.01, batch_size = 64)
+    simple_kriging_pred_ICs <- data.frame(matrix(NA, nrow = nrow(data_ilr_test), ncol = p))
+    for (i in seq_len(p)) {
+        simple_kriging_pred_ICs[, i] <- kriging_predict(resiVAE_train$IC[, i], coords_train, coords_test)
+    }
+    pred_obs_ic_sk <- predict(resiVAE_train, as.matrix(simple_kriging_pred_ICs), IC_to_data = TRUE)
+    pred_obs_ic_sk <- as.matrix(pred_obs_ic_sk) %*% t(c_mat)
+    preds <- append(preds, list(list(method = "iVAEOrdKriging", pred = pred_obs_ic_sk, fold = fold)))
+    mse_krig_ic <- mean(as.matrix(pred_obs_ic_sk - clr_test_dat)^2)
+    mae_krig_ic <- mean(as.matrix(abs(pred_obs_ic_sk - clr_test_dat)))
+
+    uni_kriging_pred_ICs <- data.frame(matrix(NA, nrow = nrow(data_ilr_test), ncol = p))
+    for (i in seq_len(p)) {
+        uni_kriging_pred_ICs[, i] <- kriging_predict(resiVAE_train$IC[, i], coords_train, coords_test, universal = TRUE)
+    }
+    pred_obs_ic_sk_uni <- predict(resiVAE_train, as.matrix(uni_kriging_pred_ICs), IC_to_data = TRUE)
+    pred_obs_ic_sk_uni <- as.matrix(pred_obs_ic_sk_uni) %*% t(c_mat)
+    preds <- append(preds, list(list(method = "iVAEUniKriging", pred = pred_obs_ic_sk_uni, fold = fold)))
+    mse_unikrig_ic <- mean(as.matrix(pred_obs_ic_sk_uni - clr_test_dat)^2)
+    mae_unikrig_ic <- mean(as.matrix(abs(pred_obs_ic_sk_uni - clr_test_dat)))
+
+    res_error[ind, ] <- c("iVAEOrdKriging", mse_krig_ic, mae_krig_ic, fold)
+    ind <- ind + 1
+    res_error[ind, ] <- c("iVAEUniKriging", mse_unikrig_ic, mae_unikrig_ic, fold)
+    ind <- ind + 1
+    res_error[ind, ] <- c("Cokriging", mse_cokrig_obs, mae_cokrig_obs, fold)
+    ind <- ind + 1
+
+    resSBSS_train <- sbss(as.matrix(data_ilr_train), as.matrix(coords_train), "ring", c(0, 167000), maxiter = 1000)
+
+    krig_pred_ICs_sbss <- matrix(NA, nrow = n_test, ncol = p)
+    for (i in 1:p) {
+        IC_i <- as.matrix(resSBSS_train$s[, i], ncol = 1)
+        krig_pred_ICs_sbss[, i] <- kriging_predict(IC_i, coords_train, coords_test)
+    }
+    krig_sbss_pred_obs <- sweep(tcrossprod(krig_pred_ICs_sbss, resSBSS_train$w_inv), 2, resSBSS_train$x_mu, "+") %*% t(c_mat)
+    preds <- append(preds, list(list(method = "SBSSOrdKriging", pred = krig_sbss_pred_obs, fold = fold)))
+    mse_krig_ic_sbss <- mean(as.matrix(krig_sbss_pred_obs - clr_test_dat)^2)
+    mae_krig_ic_sbss <- mean(as.matrix(abs(krig_sbss_pred_obs - clr_test_dat)))
+
+    res_error[ind, ] <- c("SBSSOrdKriging", mse_krig_ic_sbss, mae_krig_ic_sbss, fold)
+    ind <- ind + 1
+
+    unikrig_pred_ICs_sbss <- matrix(NA, nrow = n_test, ncol = p)
+    for (i in 1:p) {
+        IC_i <- as.matrix(resSBSS_train$s[, i], ncol = 1)
+        unikrig_pred_ICs_sbss[, i] <- kriging_predict(IC_i, coords_train, coords_test, universal = TRUE)
+    }
+    unikrig_sbss_pred_obs <- sweep(tcrossprod(unikrig_pred_ICs_sbss, resSBSS_train$w_inv), 2, resSBSS_train$x_mu, "+") %*% t(c_mat)
+    preds <- append(preds, list(list(method = "SBSSUniKriging", pred = unikrig_sbss_pred_obs, fold = fold)))
+    unimse_krig_ic_sbss <- mean(as.matrix(unikrig_sbss_pred_obs - clr_test_dat)^2)
+    unimae_krig_ic_sbss <- mean(as.matrix(abs(unikrig_sbss_pred_obs - clr_test_dat)))
+    res_error[ind, ] <- c("SBSSUniKriging", unimse_krig_ic_sbss, unimae_krig_ic_sbss, fold)
+    ind <- ind + 1
+
+    resSNSS_train <- snss_sjd(as.matrix(data_ilr_train), as.matrix(coords_train), n_block = 2, "ring", c(0, 167000), maxiter = 1000)
+    snss_ics <- tcrossprod(data_ilr_train, resSNSS_train$w)
+    krig_pred_ICs_snss <- matrix(NA, nrow = n_test, ncol = p)
+    for (i in 1:p) {
+        IC_i <- as.matrix(snss_ics[, i], ncol = 1)
+        krig_pred_ICs_snss[, i] <- kriging_predict(IC_i, coords_train, coords_test)
+    }
+    krig_snss_pred_obs <- tcrossprod(krig_pred_ICs_snss, solve(resSNSS_train$w)) %*% t(c_mat)
+    preds <- append(preds, list(list(method = "SNSSOrdKriging", pred = krig_snss_pred_obs, fold = fold)))
+    mse_krig_ic_snss <- mean(as.matrix(krig_snss_pred_obs - clr_test_dat)^2)
+    mae_krig_ic_snss <- mean(as.matrix(abs(krig_snss_pred_obs - clr_test_dat)))
+    res_error[ind, ] <- c("SNSSOrdKriging", mse_krig_ic_snss, mae_krig_ic_snss, fold)
+    ind <- ind + 1
+
+    unikrig_pred_ICs_snss <- matrix(NA, nrow = n_test, ncol = p)
+    for (i in 1:p) {
+        IC_i <- as.matrix(snss_ics[, i], ncol = 1)
+        unikrig_pred_ICs_snss[, i] <- kriging_predict(IC_i, coords_train, coords_test, universal = TRUE)
+    }
+    unikrig_snss_pred_obs <- tcrossprod(unikrig_pred_ICs_snss, solve(resSNSS_train$w)) %*% t(c_mat)
+    preds <- append(preds, list(list(method = "SNSSUniKriging", pred = unikrig_snss_pred_obs, fold = fold)))
+    mse_unikrig_ic_snss <- mean(as.matrix(unikrig_snss_pred_obs - clr_test_dat)^2)
+    mae_unikrig_ic_snss <- mean(as.matrix(abs(unikrig_snss_pred_obs - clr_test_dat)))
+    res_error[ind, ] <- c("SNSSUniKriging", mse_unikrig_ic_snss, mae_unikrig_ic_snss, fold)
+    ind <- ind + 1
+}
+save(preds, file = "res_preds.RData")
+save(res_error, file = "res_error.RData")
+
+names(res_error) <- c("Method", "MSE", "MAE", "Fold")
+res_error$RMSE <- sqrt(as.numeric(res_error$MSE))
+ag1 <- aggregate(as.numeric(MSE) ~ Method, data = res_error, mean)
+ag2 <- aggregate(as.numeric(MAE) ~ Method, data = res_error, mean)
+ag3 <- aggregate(as.numeric(RMSE) ~ Method, data = res_error, mean)
+ag <- cbind(ag1, ag2[, 2], ag3[, 2])
+names(ag) <- c("Method", "MSE", "MAE", "RMSE")
+
+xtable(ag, digits = 4)
